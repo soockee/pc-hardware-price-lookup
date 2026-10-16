@@ -1,9 +1,11 @@
+import { buildCpuSearchPlan, cpuSocket, matchCpuProduct, shouldSearchCpuFallback } from "./cpu-matching";
+
 const MAX_REQUEST_BYTES = 16 * 1024;
 const MAX_UPSTREAM_BYTES = 256 * 1024;
 const MAX_COMPONENTS = 16;
 const REQUEST_TIMEOUT_MS = 90_000;
 const CACHE_TTL_SECONDS = 600;
-const CACHE_SCHEMA_VERSION = "alternatives-v2";
+const CACHE_SCHEMA_VERSION = "alternatives-v3";
 const DEFAULT_PRICES_API_BASE = "https://api.pricesapi.io/api/v1";
 const PRICEABLE_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD"]);
 const ALL_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD", "OS"]);
@@ -12,7 +14,7 @@ type ComponentType = "CPU" | "GPU" | "RAM" | "STORAGE" | "MOTHERBOARD" | "OS";
 type Component = { type: ComponentType; name: string };
 type Offer = { title: string; price: number | null; currency: string | null; merchant: string | null; available: boolean | null; stock: string | null; delivery: string | null; url: string | null; matchType: "exact" | "similar"; matchLabel: string };
 type PriceResult = { type: ComponentType; name: string; status: "ok" | "no_match" | "unsupported"; offers: Offer[] };
-type SearchPlan = { query: string; exactModel: string | null; label: string };
+type SearchPlan = { query: string; exactModel: string | null; label: string; fallbackQuery?: string | null };
 type Match = { matchType: "exact" | "similar"; matchLabel: string };
 type ApiError = Error & { status?: number; code?: string };
 
@@ -67,6 +69,25 @@ async function lookupComponent(component: Component, components: Component[], en
   if (!PRICEABLE_TYPES.has(component.type)) return { ...component, status: "unsupported", offers: [] };
 
   const plan = buildSearchPlan(component, components);
+  const primaryOffers = await searchComponentOffers(component, components, plan, env);
+  let offers = primaryOffers;
+
+  if (component.type === "CPU" && shouldSearchCpuFallback(plan, primaryOffers)) {
+    try {
+      const fallbackOffers = await searchComponentOffers(component, components, { ...plan, query: plan.fallbackQuery, fallbackQuery: null }, env);
+      offers = [...primaryOffers, ...fallbackOffers];
+    } catch (error) {
+      if (!primaryOffers.length) throw error;
+      console.warn(JSON.stringify({ event: "cpu_fallback_search_error", message: error instanceof Error ? error.message : String(error) }));
+    }
+  }
+
+  const uniqueOffers = [...new Map(offers.map((offer) => [offer.url || `${offer.title}:${offer.price}:${offer.merchant}`, offer])).values()];
+  uniqueOffers.sort((a, b) => Number(b.matchType === "exact") - Number(a.matchType === "exact") || Number(b.available === true) - Number(a.available === true) || (a.price ?? Number.POSITIVE_INFINITY) - (b.price ?? Number.POSITIVE_INFINITY));
+  return { ...component, status: uniqueOffers.length ? "ok" : "no_match", offers: uniqueOffers.slice(0, 5) };
+}
+
+async function searchComponentOffers(component: Component, components: Component[], plan: SearchPlan, env: Env): Promise<Offer[]> {
   const apiBase = env.PRICES_API_BASE || DEFAULT_PRICES_API_BASE;
   const endpoint = new URL(`${apiBase.replace(/\/$/, "")}/products/search`);
   endpoint.searchParams.set("q", plan.query);
@@ -88,15 +109,16 @@ async function lookupComponent(component: Component, components: Component[], en
     return product.offers
       .map((offer) => {
         const offerTitle = isRecord(offer) ? stringValue(offer.product_title) || fallbackTitle : fallbackTitle;
-        const match = matchProduct(component, components, plan, offerTitle);
+        const match = matchProduct(component, components, plan, offerTitle)
+          || (component.type === "CPU" && offerTitle !== fallbackTitle
+            ? matchProduct(component, components, plan, fallbackTitle)
+            : null);
         if (!match) return null;
         return normalizeOffer(offer, fallbackTitle, match);
       })
       .filter((item): item is Offer => item !== null);
   });
-  const uniqueOffers = [...new Map(offers.map((offer) => [offer.url || `${offer.title}:${offer.price}:${offer.merchant}`, offer])).values()];
-  uniqueOffers.sort((a, b) => Number(b.matchType === "exact") - Number(a.matchType === "exact") || Number(b.available === true) - Number(a.available === true) || (a.price ?? Number.POSITIVE_INFINITY) - (b.price ?? Number.POSITIVE_INFINITY));
-  return { ...component, status: uniqueOffers.length ? "ok" : "no_match", offers: uniqueOffers.slice(0, 5) };
+  return offers;
 }
 
 function normalizeComponents(payload: unknown): Component[] {
@@ -139,11 +161,7 @@ function buildSearchPlan(component: Component, components: Component[]): SearchP
   }
 
   if (component.type === "CPU") {
-    const socket = cpuSocket(component.name);
-    if (socket) {
-      const tier = component.name.match(/\bCore\s+Ultra\s+[579]\b/i)?.[0] || component.name.match(/\bRyzen\s+[3579]\b/i)?.[0] || component.name.match(/\bCore\s+i[3579]\b/i)?.[0] || "desktop CPU";
-      return { query: `${tier} ${socket} processor`, exactModel: cpuModel(component.name), label: `${socket} · similar CPU` };
-    }
+    return buildCpuSearchPlan(component.name);
   }
 
   if (component.type === "RAM") {
@@ -193,12 +211,7 @@ function matchProduct(component: Component, components: Component[], plan: Searc
   }
 
   if (component.type === "CPU") {
-    const exact = plan.exactModel ? matchesCpuModel(plan.exactModel, title) : false;
-    if (exact) return { matchType: "exact", matchLabel: "same CPU model" };
-    const expectedSocket = cpuSocket(component.name);
-    const productSocket = cpuSocket(title);
-    if (expectedSocket && productSocket === expectedSocket && /\b(?:processor|CPU|Ryzen|Core|Xeon)\b/i.test(title)) return { matchType: "similar", matchLabel: plan.label };
-    return null;
+    return matchCpuProduct(component.name, plan, title);
   }
 
   if (component.type === "RAM") {
@@ -254,34 +267,6 @@ function matchesGpuModel(model: string, title: string): boolean {
   const escaped = number.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const suffixPattern = suffix ? `\\s*${suffix}` : "(?!\\s*(?:TI|SUPER|XT|XTX|GRE)\\b)";
   return new RegExp(`\\b${family}\\s*${escaped}${suffixPattern}\\b`, "i").test(title.replace(/-/g, " "));
-}
-
-function cpuModel(value: string): string | null {
-  return value.match(/\b(?:i[3579]-?\d{4,5}[A-Z]{0,3}|\d{3,5}(?:X3D|XT|KF|KS|K|X|F|G)?|[3579]-\d{4,5}[A-Z]{0,3})\b/i)?.[0] || null;
-}
-
-function matchesCpuModel(model: string, title: string): boolean {
-  const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`\\b${escaped}\\b`, "i").test(title);
-}
-
-function cpuSocket(value: string): string | null {
-  const text = value.toUpperCase();
-  if (/\bCORE\s+ULTRA\s+[579]\s+2\d{2}[A-Z]*\b/.test(text) || /\bCORE\s+[579]\s+2\d{2}[A-Z]*\b/.test(text)) return "LGA1851";
-  const intel = text.match(/\bI[3579]-?([89]|1[0-4])\d{3,4}[A-Z]{0,2}\b/);
-  if (intel) {
-    const series = Number(intel[1]);
-    if (series >= 12) return "LGA1700";
-    if (series >= 10) return "LGA1200";
-    if (series >= 8) return "LGA1151";
-  }
-  const ryzen = text.match(/\bRYZEN\s+[3579]\s+(\d{4}[A-Z0-9]*)\b/);
-  if (ryzen) {
-    const series = Number(ryzen[1][0]);
-    if (series >= 7 && series <= 9) return "AM5";
-    if (series >= 1 && series <= 5) return "AM4";
-  }
-  return null;
 }
 
 function boardSocket(title: string): string | null {

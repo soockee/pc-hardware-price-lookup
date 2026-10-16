@@ -8,7 +8,8 @@
     "types": "wrangler types",
     "types:check": "wrangler types --check",
     "check": "wrangler check startup",
-    "typecheck": "wrangler types && tsc --noEmit"
+    "typecheck": "wrangler types && tsc --noEmit",
+    "test": "node --experimental-strip-types --test"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
