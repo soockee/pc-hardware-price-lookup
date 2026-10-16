@@ -46,7 +46,10 @@ const reportText = document.querySelector("#report-text");
 const fileInput = document.querySelector("#report-file");
 const results = document.querySelector("#results");
 const status = document.querySelector("#status");
+const PRICE_API_URL = "https://rigcheck-prices.gamingsockee.workers.dev/v1/price-check";
 let selectedOs = /mac/i.test(navigator.platform) ? "macos" : /linux/i.test(navigator.platform) ? "linux" : "windows";
+let lookupTimer;
+let lookupSequence = 0;
 
 const patterns = [
   ["GPU", /(gpu|graphics card|graphics adapter|display adapter|video controller)(?:\s*[:=,-]\s*|\s+)(.+)/i],
@@ -86,11 +89,6 @@ function parseReport(raw) {
   }).filter(Boolean);
 }
 
-function priceUrl(type, value) {
-  const category = { GPU: "gpus", CPU: "cpus", RAM: "ram", STORAGE: "ssds" }[type];
-  return category ? `https://www.pricesquirrel.com/${category}` : null;
-}
-
 function render(items, source = "report") {
   if (!items.length) {
     results.innerHTML = `<div class="result-empty">No recognizable components yet. Paste the complete output from the command.</div>`;
@@ -98,11 +96,43 @@ function render(items, source = "report") {
     return;
   }
   results.innerHTML = items.map(({ type, value }) => {
-    const url = priceUrl(type, value);
-    const action = url ? `<a class="price-link" href="${url}" target="_blank" rel="noreferrer">Price check ↗</a>` : `<span class="price-link muted-link">not tracked</span>`;
-    return `<div class="result-row"><span class="result-type">${type}</span><span class="result-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span>${action}</div>`;
+    return `<div class="result-row"><span class="result-type">${type}</span><span class="result-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span><span class="price-link muted-link">checking…</span></div>`;
   }).join("");
-  status.textContent = `${items.length} component${items.length === 1 ? "" : "s"} · ${source}`;
+  status.textContent = `${items.length} component${items.length === 1 ? "" : "s"} · checking prices`;
+  clearTimeout(lookupTimer);
+  const sequence = ++lookupSequence;
+  lookupTimer = setTimeout(() => lookupPrices(items, source, sequence), 350);
+}
+
+function offerMarkup(offer) {
+  if (!offer.url) return `<span class="price-link muted-link">no link</span>`;
+  const amount = offer.price === null ? "view offer" : `${offer.currency || ""} ${Number(offer.price).toFixed(2)}`.trim();
+  const merchant = offer.merchant ? ` · ${offer.merchant}` : "";
+  return `<a class="price-link" href="${escapeHtml(offer.url)}" target="_blank" rel="noreferrer" title="${escapeHtml(offer.title)}">${escapeHtml(`${amount}${merchant}`)} ↗</a>`;
+}
+
+async function lookupPrices(items, source, sequence) {
+  try {
+    const response = await fetch(PRICE_API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ components: items.map(({ type, value }) => ({ type, name: value })) }),
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.message || payload.error || "Price service unavailable");
+    if (sequence !== lookupSequence) return;
+    const mapped = new Map(payload.results.map((result) => [`${result.type}:${result.name.toLowerCase()}`, result]));
+    results.innerHTML = items.map(({ type, value }) => {
+      const result = mapped.get(`${type}:${value.toLowerCase()}`);
+      const action = result?.offers?.length ? result.offers.slice(0, 2).map(offerMarkup).join("") : `<span class="price-link muted-link">${result?.status === "unsupported" ? "not tracked" : "no match"}</span>`;
+      return `<div class="result-row"><span class="result-type">${type}</span><span class="result-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span><span class="price-links">${action}</span></div>`;
+    }).join("");
+    status.textContent = `${items.length} component${items.length === 1 ? "" : "s"} · ${source}`;
+  } catch (error) {
+    if (sequence !== lookupSequence) return;
+    results.innerHTML = items.map(({ type, value }) => `<div class="result-row"><span class="result-type">${type}</span><span class="result-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span><span class="price-link muted-link">price service unavailable</span></div>`).join("");
+    status.textContent = error instanceof Error ? error.message : "price service unavailable";
+  }
 }
 
 function readText(raw, source) { render(parseReport(raw), source); }

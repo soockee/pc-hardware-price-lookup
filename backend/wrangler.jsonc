@@ -1,0 +1,38 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "rigcheck-prices",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-16",
+  "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "env": {
+    "staging": {
+      "name": "rigcheck-prices-staging",
+      "vars": {
+        "ALLOWED_ORIGINS": "http://localhost:8787,http://localhost:5173",
+        "KELKOO_API_BASE": "https://api.kelkoogroup.net/publisher/shopping/v2",
+        "KELKOO_COUNTRY": "de"
+      },
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
+      }
+    },
+    "production": {
+      "name": "rigcheck-prices",
+      "vars": {
+        "ALLOWED_ORIGINS": "https://soockee.github.io",
+        "KELKOO_API_BASE": "https://api.kelkoogroup.net/publisher/shopping/v2",
+        "KELKOO_COUNTRY": "de"
+      },
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1
+      }
+    }
+  }
+}

@@ -1,17 +1,31 @@
 # RigCheck
 
-RigCheck is a small browser utility for generating a local PC hardware report and opening the relevant live PriceSquirrel price category.
+RigCheck is a small browser utility for generating a paste-ready PC hardware report and checking component prices through its Cloudflare Worker backend.
 
 ## Why the browser boundary matters
 
 Modern browsers do not expose arbitrary PCI/SMBIOS hardware to a web page. This prototype keeps the permission boundary explicit:
 
-- the browser scan reads safe hints such as platform and logical-core count;
-- WebHID/WebUSB device lists are queried only after a user click and only include previously authorized devices;
-- a trusted local text/JSON/CSV report can be parsed in-browser as a fallback;
-- no report is uploaded by this static page.
+- the browser cannot inspect arbitrary PCI/SMBIOS hardware without a user-run local command;
+- the provided scripts read component names and sizes and copy a plain-text report;
+- the browser parses the pasted report and sends only the detected component names to the price API.
 
-The page provides read-only scripts for Windows PowerShell, macOS Terminal and Linux Terminal. Each script prints CPU, GPU, RAM, storage, motherboard and OS information in a paste-ready format and copies the output to the local clipboard. Pasting updates the component list automatically; tracked component types show a direct PriceSquirrel category link. The page does not upload the report.
+The page provides read-only scripts for Windows PowerShell, macOS Terminal and Linux Terminal. Each script prints CPU, GPU, RAM, storage, motherboard and OS information in a paste-ready format and copies the output to the local clipboard. Pasting updates the component list and automatically requests live offers from the backend.
+
+## Backend
+
+The `backend/` directory contains the Cloudflare Worker API. It validates requests, keeps the Kelkoo publisher token in a Cloudflare secret, applies origin and size limits, times out upstream requests, caches short-lived results, and returns structured errors. It intentionally does not scrape retailer websites or invent prices.
+
+From `backend/`:
+
+```text
+npm install
+npm run typecheck
+npm run deploy
+npx wrangler secret put KELKOO_TOKEN --env production
+```
+
+The production Worker is `https://rigcheck-prices.gamingsockee.workers.dev`. Without the secret, `/health` remains available and price checks return `provider_not_configured`.
 
 ## Run locally
 
