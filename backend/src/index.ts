@@ -3,6 +3,7 @@ const MAX_UPSTREAM_BYTES = 256 * 1024;
 const MAX_COMPONENTS = 16;
 const REQUEST_TIMEOUT_MS = 90_000;
 const CACHE_TTL_SECONDS = 600;
+const CACHE_SCHEMA_VERSION = "relevance-v1";
 const DEFAULT_PRICES_API_BASE = "https://api.pricesapi.io/api/v1";
 const PRICEABLE_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD"]);
 const RELEVANCE_STOP_WORDS = new Set([
@@ -45,7 +46,7 @@ async function handlePriceCheck(request: Request, env: Env, ctx: ExecutionContex
     if (!env.PRICES_API_KEY) return json({ error: "provider_not_configured", message: "PRICES_API_KEY is not configured.", requestId }, 503, cors);
 
     const market = env.PRICES_API_MARKET || "de";
-    const cacheKey = new Request(`https://cache.rigcheck.invalid/v1/price-check?market=${market}&components=${encodeURIComponent(JSON.stringify(components))}`);
+    const cacheKey = new Request(`https://cache.rigcheck.invalid/${CACHE_SCHEMA_VERSION}/price-check?market=${market}&components=${encodeURIComponent(JSON.stringify(components))}`);
     const cached = await caches.default.match(cacheKey);
     if (cached) {
       const cachedPayload = await readJsonResponse(cached, MAX_UPSTREAM_BYTES);
