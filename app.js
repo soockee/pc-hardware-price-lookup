@@ -1,98 +1,97 @@
-const state = { components: [] };
-
-const demoComponents = [
-  { type: "GPU", value: "Browser-visible display adapter", query: "graphics card" },
-  { type: "CPU", value: "Browser-visible processor hint", query: "cpu" },
-  { type: "RAM", value: "Memory capacity unavailable", query: "ddr5 ram" },
-  { type: "SSD", value: "Import a report to identify", query: "nvme ssd" },
-];
-
-const scanButton = document.querySelector("#scan-button");
-const reportFile = document.querySelector("#report-file");
+const fileInput = document.querySelector("#report-file");
+const dropzone = document.querySelector(".dropzone");
 const fileName = document.querySelector("#file-name");
-const scanStatus = document.querySelector("#scan-status");
-const scanOutput = document.querySelector("#scan-output");
-const hardwarePanel = document.querySelector("#hardware-panel");
-const hardwareList = document.querySelector("#hardware-list");
-const pricePanel = document.querySelector("#price-panel");
-const priceList = document.querySelector("#price-list");
+const reportText = document.querySelector("#report-text");
+const parseButton = document.querySelector("#parse-button");
+const scanButton = document.querySelector("#scan-button");
+const results = document.querySelector("#results");
+const status = document.querySelector("#status");
+
+const patterns = [
+  ["GPU", /(gpu|graphics card|graphics adapter|display adapter|video controller)(?:\s*[:=,-]\s*|\s+)(.+)/i],
+  ["CPU", /(cpu|processor|model name)(?:\s*[:=,-]\s*|\s+)(.+)/i],
+  ["RAM", /(ram|memory|installed physical memory)(?:\s*[:=,-]\s*|\s+)(.+)/i],
+  ["SSD", /(ssd|nvme|storage|disk model)(?:\s*[:=,-]\s*|\s+)(.+)/i],
+];
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[character]));
 }
 
-function renderComponents() {
-  hardwareList.innerHTML = state.components.map((item) => `
-    <div class="hardware-item"><span class="hardware-type">${escapeHtml(item.type)}</span><span class="hardware-value">${escapeHtml(item.value)}</span></div>
-  `).join("");
-  hardwarePanel.hidden = false;
-  pricePanel.hidden = true;
-}
-
-function browserHints() {
-  const hints = [];
-  const uaData = navigator.userAgentData;
-  const platform = uaData?.platform || navigator.platform || "Unknown platform";
-  const browserCpu = navigator.hardwareConcurrency ? `${navigator.hardwareConcurrency} logical cores reported` : "Core count unavailable";
-  hints.push({ type: "CPU", value: browserCpu, query: "cpu" });
-  hints.push({ type: "PLATFORM", value: platform, query: "pc hardware" });
-  if (navigator.deviceMemory) hints.push({ type: "RAM", value: `At least ${navigator.deviceMemory} GB reported`, query: "ddr5 ram" });
-  return hints;
-}
-
-async function runScan() {
-  scanButton.disabled = true;
-  scanStatus.textContent = "reading safe hints…";
-  scanButton.innerHTML = "Scanning <span>…</span>";
-  let devices = 0;
+function parseJson(value) {
   try {
-    if (navigator.hid?.getDevices) devices += (await navigator.hid.getDevices()).length;
-    if (navigator.usb?.getDevices) devices += (await navigator.usb.getDevices()).length;
-  } catch (error) {
-    // Permission errors are expected until a user authorizes a device.
+    const data = JSON.parse(value);
+    return Object.entries(data).map(([key, item]) => `${key}: ${typeof item === "object" ? JSON.stringify(item) : item}`).join("\n");
+  } catch {
+    return value;
   }
-  state.components = [...browserHints(), { type: "DEVICES", value: devices ? `${devices} authorized device${devices === 1 ? "" : "s"}` : "No authorized USB/HID devices", query: "pc hardware" }];
-  scanOutput.innerHTML = `<div class="output-row"><span>Browser hints</span><strong>${state.components.length - 1} signals</strong></div><div class="output-row"><span>Authorized devices</span><strong>${devices}</strong></div><div class="output-row"><span>Data sent</span><strong>nothing</strong></div>`;
-  renderComponents();
-  scanStatus.textContent = "scan complete";
-  scanButton.disabled = false;
-  scanButton.innerHTML = "Scan again <span>↗</span>";
 }
 
-function parseReport(text) {
+function parseReport(raw) {
+  const trimmed = raw.trim();
+  const text = trimmed.startsWith("{") || trimmed.startsWith("[") ? parseJson(trimmed) : raw;
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  const patterns = [
-    ["GPU", /(gpu|graphics|display adapter|video controller)\s*[:=-]?\s*(.+)/i, "graphics card"],
-    ["CPU", /(cpu|processor|model name)\s*[:=-]?\s*(.+)/i, "cpu"],
-    ["RAM", /(ram|memory|installed physical memory)\s*[:=-]?\s*(.+)/i, "ddr5 ram"],
-    ["SSD", /(ssd|nvme|storage|disk model)\s*[:=-]?\s*(.+)/i, "nvme ssd"],
-  ];
-  const found = patterns.map(([type, pattern, query]) => {
+  return patterns.map(([type, pattern]) => {
     const match = lines.map((line) => line.match(pattern)).find(Boolean);
-    return match ? { type, value: match[2].trim(), query } : null;
+    return match ? { type, value: match[2].trim() } : null;
   }).filter(Boolean);
-  return found.length ? found : demoComponents;
 }
 
-function renderPrices() {
-  priceList.innerHTML = state.components.filter((item) => ["GPU", "CPU", "RAM", "SSD"].includes(item.type)).map((item) => {
-    const searchUrl = `https://www.pricesquirrel.com/?q=${encodeURIComponent(item.value === "Browser-visible display adapter" ? item.query : item.value)}`;
-    return `<div class="price-item"><span class="hardware-type">${escapeHtml(item.type)}</span><span class="price-value">check live</span><a class="price-link" href="${searchUrl}" target="_blank" rel="noreferrer">Open PriceSquirrel ↗</a></div>`;
+function render(items, source = "report") {
+  if (!items.length) {
+    results.innerHTML = `<div class="result-empty">No CPU, GPU, RAM or SSD lines found. Try <code>GPU: NVIDIA RTX 4070</code>.</div>`;
+    status.textContent = "nothing recognized";
+    return;
+  }
+  results.innerHTML = items.map(({ type, value }) => {
+    const url = `https://www.pricesquirrel.com/?q=${encodeURIComponent(value)}`;
+    return `<div class="result-row"><span class="result-type">${type}</span><span class="result-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span><a class="price-link" href="${url}" target="_blank" rel="noreferrer">Price ↗</a></div>`;
   }).join("");
-  pricePanel.hidden = false;
-  pricePanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  status.textContent = `${items.length} component${items.length === 1 ? "" : "s"} · ${source}`;
 }
 
-scanButton.addEventListener("click", runScan);
+function readText(raw, source) {
+  render(parseReport(raw), source);
+}
 
-reportFile.addEventListener("change", async (event) => {
-  const file = event.target.files?.[0];
+fileInput.addEventListener("change", async () => {
+  const file = fileInput.files?.[0];
   if (!file) return;
-  fileName.textContent = `${file.name} · parsing locally`;
-  const text = await file.text();
-  state.components = parseReport(text);
-  renderComponents();
-  fileName.textContent = `${file.name} · ready`;
+  await loadFile(file);
 });
 
-document.querySelector("#price-button").addEventListener("click", renderPrices);
+async function loadFile(file) {
+  fileName.textContent = `${file.name} · reading…`;
+  readText(await file.text(), "local file");
+  fileName.textContent = `${file.name} · ready`;
+}
+
+dropzone.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  dropzone.classList.add("is-dragging");
+});
+
+dropzone.addEventListener("dragleave", () => dropzone.classList.remove("is-dragging"));
+dropzone.addEventListener("drop", async (event) => {
+  event.preventDefault();
+  dropzone.classList.remove("is-dragging");
+  const file = event.dataTransfer.files?.[0];
+  if (file) await loadFile(file);
+});
+
+parseButton.addEventListener("click", () => {
+  if (!reportText.value.trim()) {
+    status.textContent = "paste report text first";
+    reportText.focus();
+    return;
+  }
+  readText(reportText.value, "pasted text");
+});
+
+scanButton.addEventListener("click", () => {
+  const hints = [];
+  if (navigator.hardwareConcurrency) hints.push({ type: "CPU", value: `${navigator.hardwareConcurrency} logical cores reported` });
+  if (navigator.deviceMemory) hints.push({ type: "RAM", value: `at least ${navigator.deviceMemory} GB reported` });
+  if (navigator.userAgentData?.platform || navigator.platform) hints.push({ type: "OS", value: navigator.userAgentData?.platform || navigator.platform });
+  render(hints, "browser hints");
+});

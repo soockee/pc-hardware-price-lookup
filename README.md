@@ -1,6 +1,6 @@
 # RigCheck
 
-RigCheck is a browser-safe, static prototype for identifying a user's PC hardware and handing off to live European pricing on [PriceSquirrel](https://www.pricesquirrel.com/).
+RigCheck is a small browser utility for opening a local PC hardware report and sending recognizable component names to [PriceSquirrel](https://www.pricesquirrel.com/).
 
 ## Why the browser boundary matters
 
@@ -11,7 +11,7 @@ Modern browsers do not expose arbitrary PCI/SMBIOS hardware to a web page. This 
 - a trusted local text/JSON/CSV report can be parsed in-browser as a fallback;
 - no report is uploaded by this static page.
 
-The current price cards are labeled as a preview and link to PriceSquirrel search pages. A production version should connect a permitted server-side adapter or a documented PriceSquirrel data endpoint, then replace the preview label with returned prices and timestamps.
+The page links each parsed component to PriceSquirrel. It does not claim live API access or upload the report.
 
 ## Run locally
 
