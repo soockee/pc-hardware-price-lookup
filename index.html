@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Copy a local hardware report script, paste the result, and check component prices." />
+    <meta name="description" content="Create a local PC hardware report and check component prices." />
     <title>RigCheck</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -12,29 +12,29 @@
       <header class="topbar"><a class="brand" href="./">RigCheck</a><span class="local-badge">local only</span></header>
 
       <section class="workspace">
-        <div class="script-panel">
-          <p class="eyebrow">1 / get report</p>
-          <h1>Copy, run, paste.</h1>
-          <p class="muted">Use the read-only script for your computer. It formats CPU, GPU, RAM and storage into one clipboard-ready report.</p>
+        <div class="report-panel">
+          <p class="eyebrow">1 / create your report</p>
+          <h1>Find the parts in your computer.</h1>
+          <p class="intro">Copy the command below and run it in your terminal. It only reads your component names and sizes, then copies a plain-text summary to your clipboard. Nothing is installed or uploaded.</p>
           <div class="os-tabs" role="tablist" aria-label="Operating system">
             <button class="os-tab" data-os="windows" type="button">Windows</button>
             <button class="os-tab" data-os="macos" type="button">macOS</button>
             <button class="os-tab" data-os="linux" type="button">Linux</button>
           </div>
-          <div class="script-toolbar"><span id="script-label">Windows PowerShell</span><button id="copy-script" class="copy-button" type="button">Copy script</button></div>
+          <div class="script-toolbar"><span id="script-label">Windows PowerShell</span><button id="copy-script" class="copy-button" type="button">Copy command</button></div>
           <pre class="script-box"><code id="script-code"></code></pre>
-          <p id="copy-status" class="copy-status" aria-live="polite">Run it in PowerShell. The output is copied to your clipboard.</p>
+          <p id="copy-status" class="helper" aria-live="polite">Run the copied command in PowerShell. Your report will be copied automatically.</p>
         </div>
 
-        <div class="paste-panel">
-          <p class="eyebrow">2 / check prices</p>
-          <h2>Paste the report</h2>
-          <textarea id="report-text" rows="7" placeholder="Paste the copied report here"></textarea>
-          <button id="parse-button" class="button button-primary" type="button">Check components <span>↗</span></button>
-          <label class="file-fallback" for="report-file">or import an existing report file<input id="report-file" type="file" accept=".txt,.log,.json,.csv,text/plain,application/json,text/csv" /></label>
+        <div class="check-panel">
+          <p class="eyebrow">2 / automatic price check</p>
+          <h2>Paste your report.</h2>
+          <p class="paste-help">Paste the clipboard contents here. The component list and available price checks appear automatically.</p>
+          <textarea id="report-text" rows="7" placeholder="Paste here — results update automatically"></textarea>
+          <label class="file-fallback" for="report-file">or choose an existing report file<input id="report-file" type="file" accept=".txt,.log,.json,.csv,text/plain,application/json,text/csv" /></label>
 
-          <div class="results-heading"><h3>Components</h3><span id="status" class="status" aria-live="polite">waiting for report</span></div>
-          <div id="results" class="results-list"><div class="empty-state">Detected parts will appear here.</div></div>
+          <div class="results-heading"><h3>System components</h3><span id="status" class="status" aria-live="polite">waiting for report</span></div>
+          <div id="results" class="results-list"><div class="empty-state">Your detected components will appear here.</div></div>
         </div>
       </section>
       <footer><span>RigCheck</span><a href="https://www.pricesquirrel.com/" target="_blank" rel="noreferrer">PriceSquirrel ↗</a></footer>
