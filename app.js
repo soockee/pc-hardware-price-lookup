@@ -33,7 +33,7 @@ printf '%s\\n' "$report"`,
     label: "Linux Terminal",
     code: `cpu=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)
 gpu=$(lspci 2>/dev/null | grep -Ei 'VGA|3D|Display' | sed 's/^[^:]*: //' | paste -sd ', ' -)
-ram=$(dmidecode --type memory 2>/dev/null | awk -F: '/^[[:space:]]*(Size|Type|Speed|Manufacturer|Part Number):/{gsub(/^[ \t]+/, "", $2); if (out != "") out=out "; "; out=out $1 "=" $2} END {print out}')
+ram=$(sudo -n dmidecode --type memory 2>/dev/null | awk -F: '/^[[:space:]]*(Size|Type|Speed|Manufacturer|Part Number):/{gsub(/^[ \t]+/, "", $2); if (out != "") out=out "; "; out=out $1 "=" $2} END {print out}')
 [ -n "$ram" ] || ram=$(free -h | awk '/^Mem:/{print $2}')
 storage=$(lsblk -dn -o MODEL,SIZE,TYPE 2>/dev/null | awk '$NF=="disk" { $NF=""; sub(/[ \\t]+$/, ""); print }' | paste -sd '; ' -)
 board=$(cat /sys/devices/virtual/dmi/id/board_vendor /sys/devices/virtual/dmi/id/board_name 2>/dev/null | paste -sd ' ' -)
