@@ -3,45 +3,38 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="description" content="Open a local PC hardware report and check component prices." />
+    <meta name="description" content="Copy a local hardware report script, paste the result, and check component prices." />
     <title>RigCheck</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main class="app">
-      <header class="topbar">
-        <a class="brand" href="./">RigCheck</a>
-        <span class="local-badge">local only</span>
-      </header>
+      <header class="topbar"><a class="brand" href="./">RigCheck</a><span class="local-badge">local only</span></header>
 
-      <section class="workspace" aria-labelledby="page-title">
-        <div class="input-panel">
-          <p class="eyebrow">01 / local report</p>
-          <h1 id="page-title">Open your PC report</h1>
-          <p class="muted">Choose a text, JSON or CSV hardware report. It is read in this tab and never uploaded.</p>
-
-          <label class="dropzone" for="report-file">
-            <span class="dropzone-icon">↑</span>
-            <span><strong>Choose report file</strong><small>or drop it here</small></span>
-            <input id="report-file" type="file" accept=".txt,.log,.json,.csv,text/plain,application/json,text/csv" />
-          </label>
-          <p id="file-name" class="file-name">No file selected</p>
-
-          <div class="separator"><span>or paste report text</span></div>
-          <textarea id="report-text" rows="5" placeholder="CPU: AMD Ryzen 7 7800X3D&#10;GPU: NVIDIA GeForce RTX 4070&#10;RAM: 32 GB DDR5&#10;SSD: Samsung 990 PRO 2TB"></textarea>
-          <button id="parse-button" class="button button-primary" type="button">Read pasted report <span>↗</span></button>
-          <button id="scan-button" class="button button-subtle" type="button">Use browser hints</button>
-          <p class="privacy-note">A browser cannot read arbitrary PCI hardware. Import a report when the scan cannot identify a part.</p>
+      <section class="workspace">
+        <div class="script-panel">
+          <p class="eyebrow">1 / get report</p>
+          <h1>Copy, run, paste.</h1>
+          <p class="muted">Use the read-only script for your computer. It formats CPU, GPU, RAM and storage into one clipboard-ready report.</p>
+          <div class="os-tabs" role="tablist" aria-label="Operating system">
+            <button class="os-tab" data-os="windows" type="button">Windows</button>
+            <button class="os-tab" data-os="macos" type="button">macOS</button>
+            <button class="os-tab" data-os="linux" type="button">Linux</button>
+          </div>
+          <div class="script-toolbar"><span id="script-label">Windows PowerShell</span><button id="copy-script" class="copy-button" type="button">Copy script</button></div>
+          <pre class="script-box"><code id="script-code"></code></pre>
+          <p id="copy-status" class="copy-status" aria-live="polite">Run it in PowerShell. The output is copied to your clipboard.</p>
         </div>
 
-        <div class="results-panel">
-          <div class="results-heading">
-            <div><p class="eyebrow">02 / results</p><h2>Components</h2></div>
-            <span id="status" class="status" aria-live="polite">waiting for report</span>
-          </div>
-          <div id="results" class="results-list">
-            <div class="empty-state">Your detected CPU, GPU, RAM and storage will appear here.</div>
-          </div>
+        <div class="paste-panel">
+          <p class="eyebrow">2 / check prices</p>
+          <h2>Paste the report</h2>
+          <textarea id="report-text" rows="7" placeholder="Paste the copied report here"></textarea>
+          <button id="parse-button" class="button button-primary" type="button">Check components <span>↗</span></button>
+          <label class="file-fallback" for="report-file">or import an existing report file<input id="report-file" type="file" accept=".txt,.log,.json,.csv,text/plain,application/json,text/csv" /></label>
+
+          <div class="results-heading"><h3>Components</h3><span id="status" class="status" aria-live="polite">waiting for report</span></div>
+          <div id="results" class="results-list"><div class="empty-state">Detected parts will appear here.</div></div>
         </div>
       </section>
       <footer><span>RigCheck</span><a href="https://www.pricesquirrel.com/" target="_blank" rel="noreferrer">PriceSquirrel ↗</a></footer>
