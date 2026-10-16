@@ -5,6 +5,12 @@ const REQUEST_TIMEOUT_MS = 90_000;
 const CACHE_TTL_SECONDS = 600;
 const DEFAULT_PRICES_API_BASE = "https://api.pricesapi.io/api/v1";
 const PRICEABLE_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD"]);
+const RELEVANCE_STOP_WORDS = new Set([
+  "AMD", "INTEL", "NVIDIA", "ASUS", "ASUSTEK", "MSI", "GIGABYTE", "ASROCK", "BIOSTAR", "EVGA",
+  "INC", "CORP", "CORPORATION", "COMPUTER", "TECHNOLOGY", "SYSTEM", "SYSTEMS", "THE",
+  "WITH", "GB", "TB", "MB", "MHZ", "DDR", "RAM", "MEMORY", "MODEL", "NAME", "UNKNOWN",
+  "DESKTOP", "PROCESSOR", "GRAPHICS", "CARD", "SOLID", "STATE", "DRIVE", "DISK",
+]);
 
 const ALL_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD", "OS"]);
 
@@ -82,7 +88,13 @@ async function lookupComponent(component: Component, env: Env): Promise<PriceRes
   const offers = products.flatMap((product) => {
     if (!isRecord(product) || !Array.isArray(product.offers)) return [];
     const fallbackTitle = stringValue(product.title) || "Untitled product";
-    return product.offers.map((offer) => normalizeOffer(offer, fallbackTitle)).filter((item): item is Offer => item !== null);
+    return product.offers
+      .map((offer) => {
+        const offerTitle = isRecord(offer) ? stringValue(offer.product_title) || fallbackTitle : fallbackTitle;
+        if (!isRelevantProduct(component, offerTitle)) return null;
+        return normalizeOffer(offer, fallbackTitle);
+      })
+      .filter((item): item is Offer => item !== null);
   });
   offers.sort((a, b) => (a.price ?? Number.POSITIVE_INFINITY) - (b.price ?? Number.POSITIVE_INFINITY));
   return { ...component, status: offers.length ? "ok" : "no_match", offers: offers.slice(0, 5) };
@@ -116,6 +128,31 @@ function normalizeOffer(value: unknown, fallbackTitle: string): Offer | null {
   const url = safeUrl(stringValue(value.url));
   const available = stock ? !/out of stock|unavailable/i.test(stock) : null;
   return { title, price: price !== null && Number.isFinite(price) ? price : null, currency: stringValue(value.currency), merchant, available, stock, delivery, url };
+}
+
+function isRelevantProduct(component: Component, productTitle: string): boolean {
+  const queryTokens = relevanceTokens(component.name);
+  const titleTokens = new Set(relevanceTokens(productTitle));
+  if (!queryTokens.length || !titleTokens.size) return false;
+
+  const matchingTokens = queryTokens.filter((token) => titleTokens.has(token));
+  const hasStrongModelToken = queryTokens.some((token) => /\d/.test(token) && token.length >= 4 && titleTokens.has(token));
+
+  if (component.type === "MOTHERBOARD") {
+    const hasBoardSignal = /motherboard|mainboard|baseboard|\batx\b|micro[- ]?atx|mini[- ]?itx|chipset|socket/i.test(productTitle);
+    return hasStrongModelToken && hasBoardSignal;
+  }
+
+  if (component.type === "RAM" || component.type === "STORAGE") return hasStrongModelToken || matchingTokens.length >= 2;
+  return hasStrongModelToken || matchingTokens.length >= Math.min(2, queryTokens.length);
+}
+
+function relevanceTokens(value: string): string[] {
+  return value
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 3 && !RELEVANCE_STOP_WORDS.has(token));
 }
 
 function safeUrl(value: string | null): string | null {
