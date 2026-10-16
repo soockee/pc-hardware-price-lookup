@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="A browser-safe PC hardware price lookup powered by PriceSquirrel links." />
+    <meta name="theme-color" content="#10241f" />
+    <title>RigCheck — PC hardware, priced in a blink</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header shell">
+      <a class="brand" href="#top" aria-label="RigCheck home">
+        <span class="brand-mark">R</span>
+        <span>RigCheck</span>
+      </a>
+      <nav class="nav-links" aria-label="Main navigation">
+        <a href="#scan">Scan</a>
+        <a href="#how-it-works">How it works</a>
+        <a href="https://www.pricesquirrel.com/" target="_blank" rel="noreferrer">PriceSquirrel ↗</a>
+      </nav>
+      <span class="privacy-chip"><span class="pulse"></span> local-first</span>
+    </header>
+
+    <main id="top">
+      <section class="hero shell">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="eyebrow-dot"></span> hardware price lookup</p>
+          <h1>Know what your rig is worth <em>before</em> you sell.</h1>
+          <p class="hero-lede">Identify the parts your browser can safely see, fill in the rest from a local report, and jump straight to live European market prices.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#scan">Start a scan <span>→</span></a>
+            <a class="text-link" href="#how-it-works">Why no install? <span>↘</span></a>
+          </div>
+          <div class="hero-proof">
+            <span><strong>01</strong> no desktop app</span>
+            <span><strong>02</strong> no account</span>
+            <span><strong>03</strong> no upload by default</span>
+          </div>
+        </div>
+        <div class="hero-art" aria-hidden="true">
+          <div class="orbit orbit-one"></div>
+          <div class="orbit orbit-two"></div>
+          <div class="chip chip-main"><span class="chip-label">GPU</span><strong>SCAN</strong><small>ready</small></div>
+          <div class="chip chip-cpu"><span class="chip-label">CPU</span><strong>LOCAL</strong><small>safe</small></div>
+          <div class="chip chip-price"><span class="chip-label">PRICE</span><strong>LIVE</strong><small>EU market</small></div>
+          <div class="hero-spark spark-a"></div><div class="hero-spark spark-b"></div><div class="hero-spark spark-c"></div>
+        </div>
+      </section>
+
+      <section id="scan" class="scan-section shell">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">the two-click flow</p>
+            <h2>Start with the signal your browser can reach.</h2>
+          </div>
+          <p class="section-note">Arbitrary PCI hardware is protected by the browser sandbox. RigCheck makes that boundary visible, then gives you the fastest safe next step.</p>
+        </div>
+
+        <div class="scan-grid">
+          <div class="scan-card">
+            <div class="card-topline"><span class="step-number">01</span><span class="card-status" id="scan-status">ready to scan</span></div>
+            <h3>Browser-safe scan</h3>
+            <p>Reads non-sensitive system hints and previously authorized USB/HID devices after your click. Nothing is sent anywhere.</p>
+            <button id="scan-button" class="button button-dark" type="button">Run browser scan <span>↗</span></button>
+            <div id="scan-output" class="scan-output" aria-live="polite">
+              <div class="output-row"><span>Permission gate</span><strong>user-controlled</strong></div>
+              <div class="output-row"><span>Data path</span><strong>this browser</strong></div>
+              <div class="output-row"><span>Upload</span><strong>off</strong></div>
+            </div>
+          </div>
+
+          <div class="scan-card scan-card-accent">
+            <div class="card-topline"><span class="step-number">02</span><span class="card-status">optional fallback</span></div>
+            <h3>Bring a local report</h3>
+            <p>Drop a text export from a trusted system tool. We parse recognizable CPU, GPU, RAM and storage lines in your browser.</p>
+            <label class="file-drop" for="report-file">
+              <span class="upload-icon">↑</span>
+              <span><strong>Choose a report file</strong><small>TXT, LOG, JSON or CSV · stays local</small></span>
+            </label>
+            <input id="report-file" type="file" accept=".txt,.log,.json,.csv,text/plain,application/json,text/csv" />
+            <div id="file-name" class="file-name">No file selected</div>
+          </div>
+        </div>
+
+        <div id="hardware-panel" class="hardware-panel" hidden>
+          <div class="panel-heading"><div><p class="eyebrow">detected signals</p><h3>Ready for a market match</h3></div><span class="privacy-chip"><span class="pulse"></span> local preview</span></div>
+          <div id="hardware-list" class="hardware-list"></div>
+          <div class="panel-actions"><button id="price-button" class="button button-primary" type="button">Match against PriceSquirrel <span>→</span></button><span id="price-note" class="inline-note">Links open on PriceSquirrel. No credentials required.</span></div>
+        </div>
+
+        <div id="price-panel" class="price-panel" hidden>
+          <div class="panel-heading"><div><p class="eyebrow">market view</p><h3>Current reference prices</h3></div><span class="market-stamp">EU · EUR</span></div>
+          <div id="price-list" class="price-list"></div>
+          <p class="disclaimer">Reference cards are illustrative until a PriceSquirrel data endpoint is connected. Use the outbound links for the live product page and current retailer offers.</p>
+        </div>
+      </section>
+
+      <section id="how-it-works" class="explain-section shell">
+        <div class="section-heading">
+          <div><p class="eyebrow">why this shape</p><h2>Fast enough to feel instant. Honest enough to trust.</h2></div>
+        </div>
+        <div class="explain-grid">
+          <article><span class="explain-index">A</span><h3>No mystery installer</h3><p>GitHub Pages can run the experience as static HTML, CSS and JavaScript. The browser asks for any device permission in context.</p></article>
+          <article><span class="explain-index">B</span><h3>Graceful fallback</h3><p>When a browser cannot expose a component, a report import keeps the workflow moving without weakening the sandbox.</p></article>
+          <article><span class="explain-index">C</span><h3>Prices where they live</h3><p>PriceSquirrel tracks GPU, CPU, RAM and SSD pricing across European stores. RigCheck keeps the handoff clear and inspectable.</p></article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer shell"><span>RigCheck / a browser-safe hardware lookup</span><span>Built for the open web <span class="footer-dot">●</span></span></footer>
+    <script src="app.js"></script>
+  </body>
+</html>
