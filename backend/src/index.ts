@@ -4,7 +4,6 @@ const MAX_COMPONENTS = 16;
 const REQUEST_TIMEOUT_MS = 8_000;
 const CACHE_TTL_SECONDS = 600;
 
-const PRICE_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE"]);
 const ALL_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD", "OS"]);
 
 type ComponentType = "CPU" | "GPU" | "RAM" | "STORAGE" | "MOTHERBOARD" | "OS";
@@ -61,8 +60,6 @@ async function handlePriceCheck(request: Request, env: Env, ctx: ExecutionContex
 }
 
 async function lookupComponent(component: Component, env: Env): Promise<PriceResult> {
-  if (!PRICE_TYPES.has(component.type)) return { ...component, status: "unsupported", offers: [] };
-
   const apiBase = env.KELKOO_API_BASE || "https://api.kelkoogroup.net/publisher/shopping/v2";
   const endpoint = new URL(`${apiBase.replace(/\/$/, "")}/search/offers`);
   endpoint.searchParams.set("country", env.KELKOO_COUNTRY || "de");
