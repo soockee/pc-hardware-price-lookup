@@ -29,10 +29,18 @@
         <div class="check-panel">
           <p class="eyebrow">2 / automatic price check</p>
           <h2>Paste your report.</h2>
-          <p class="paste-help">Paste the clipboard contents here. The component list and available price checks appear automatically.</p>
+          <p class="paste-help">Paste the clipboard contents here. We’ll show what was found, then check relevant parts automatically.</p>
           <textarea id="report-text" rows="7" placeholder="Paste here — results update automatically"></textarea>
           <label class="file-fallback" for="report-file">or choose an existing report file<input id="report-file" type="file" accept=".txt,.log,.json,.csv,text/plain,application/json,text/csv" /></label>
 
+          <div class="flow" aria-label="Report and price check progress">
+            <span class="flow-step active" data-flow-step="1"><i>1</i>copy</span>
+            <span class="flow-line"></span>
+            <span class="flow-step" data-flow-step="2"><i>2</i>paste</span>
+            <span class="flow-line"></span>
+            <span class="flow-step" data-flow-step="3"><i>3</i>check</span>
+          </div>
+          <div class="progress-track" aria-hidden="true"><span id="progress-bar"></span></div>
           <div class="results-heading"><h3>System components</h3><span id="status" class="status" aria-live="polite">waiting for report</span></div>
           <div id="results" class="results-list"><div class="empty-state">Your detected components will appear here.</div></div>
         </div>

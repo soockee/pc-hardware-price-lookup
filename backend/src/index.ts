@@ -4,6 +4,7 @@ const MAX_COMPONENTS = 16;
 const REQUEST_TIMEOUT_MS = 90_000;
 const CACHE_TTL_SECONDS = 600;
 const DEFAULT_PRICES_API_BASE = "https://api.pricesapi.io/api/v1";
+const PRICEABLE_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD"]);
 
 const ALL_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD", "OS"]);
 
@@ -61,6 +62,8 @@ async function handlePriceCheck(request: Request, env: Env, ctx: ExecutionContex
 }
 
 async function lookupComponent(component: Component, env: Env): Promise<PriceResult> {
+  if (!PRICEABLE_TYPES.has(component.type)) return { ...component, status: "unsupported", offers: [] };
+
   const apiBase = env.PRICES_API_BASE || DEFAULT_PRICES_API_BASE;
   const endpoint = new URL(`${apiBase.replace(/\/$/, "")}/products/search`);
   endpoint.searchParams.set("q", component.name);

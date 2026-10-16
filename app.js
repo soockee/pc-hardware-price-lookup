@@ -3,7 +3,13 @@ const scripts = {
     label: "Windows PowerShell",
     code: `$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name
 $gpu = (Get-CimInstance Win32_VideoController | Where-Object Name | Select-Object -ExpandProperty Name) -join ", "
-$ram = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+$ram = (Get-CimInstance Win32_PhysicalMemory | ForEach-Object {
+  $size = [math]::Round($_.Capacity / 1GB, 2)
+  $speed = if ($_.ConfiguredClockSpeed) { $_.ConfiguredClockSpeed } elseif ($_.Speed) { $_.Speed } else { "?" }
+  $manufacturer = if ($_.Manufacturer) { $_.Manufacturer.Trim() } else { "unknown manufacturer" }
+  $part = if ($_.PartNumber) { $_.PartNumber.Trim() } else { "unknown part" }
+  "$size GB; $speed MHz; $manufacturer; $part"
+}) -join " | "
 $storage = (Get-CimInstance Win32_DiskDrive | Where-Object Model | ForEach-Object { "$($_.Model) $([math]::Round($_.Size / 1GB)) GB" }) -join "; "
 $board = (Get-CimInstance Win32_BaseBoard | ForEach-Object { "$($_.Manufacturer) $($_.Product)" }) -join "; "
 $os = (Get-CimInstance Win32_OperatingSystem).Caption
@@ -15,7 +21,7 @@ $report`,
     label: "macOS Terminal",
     code: `cpu=$(sysctl -n machdep.cpu.brand_string)
 gpu=$(system_profiler SPDisplaysDataType | awk -F: '/Chipset Model|Chip/{gsub(/^[ \t]+/, "", $2); print $2}' | paste -sd ', ' -)
-ram=$(sysctl -n hw.memsize | awk '{printf "%.0f GB", $1/1024/1024/1024}')
+ram=$(system_profiler SPMemoryDataType | awk -F: '/Size:|Type:|Speed:|Manufacturer:|Part Number:/{gsub(/^[ \t]+/, "", $2); if (out != "") out=out "; "; out=out $1 "=" $2} END {print out}')
 storage=$(system_profiler SPStorageDataType | awk -F: '/Device Name|Media Name/{gsub(/^[ \t]+/, "", $2); print $2}' | paste -sd '; ' -)
 model=$(system_profiler SPHardwareDataType | awk -F: '/Model Name/{gsub(/^[ \t]+/, "", $2); print $2; exit}')
 os=$(sw_vers -productVersion)
@@ -27,7 +33,8 @@ printf '%s\\n' "$report"`,
     label: "Linux Terminal",
     code: `cpu=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)
 gpu=$(lspci 2>/dev/null | grep -Ei 'VGA|3D|Display' | sed 's/^[^:]*: //' | paste -sd ', ' -)
-ram=$(free -h | awk '/^Mem:/{print $2}')
+ram=$(dmidecode --type memory 2>/dev/null | awk -F: '/^[[:space:]]*(Size|Type|Speed|Manufacturer|Part Number):/{gsub(/^[ \t]+/, "", $2); if (out != "") out=out "; "; out=out $1 "=" $2} END {print out}')
+[ -n "$ram" ] || ram=$(free -h | awk '/^Mem:/{print $2}')
 storage=$(lsblk -dn -o MODEL,SIZE,TYPE 2>/dev/null | awk '$NF=="disk" { $NF=""; sub(/[ \\t]+$/, ""); print }' | paste -sd '; ' -)
 board=$(cat /sys/devices/virtual/dmi/id/board_vendor /sys/devices/virtual/dmi/id/board_name 2>/dev/null | paste -sd ' ' -)
 os=$( . /etc/os-release 2>/dev/null && printf '%s' "$PRETTY_NAME" )
@@ -46,10 +53,13 @@ const reportText = document.querySelector("#report-text");
 const fileInput = document.querySelector("#report-file");
 const results = document.querySelector("#results");
 const status = document.querySelector("#status");
+const flowSteps = document.querySelectorAll("[data-flow-step]");
+const progressBar = document.querySelector("#progress-bar");
 const PRICE_API_URL = "https://rigcheck-prices.gamingsockee.workers.dev/v1/price-check";
 let selectedOs = /mac/i.test(navigator.platform) ? "macos" : /linux/i.test(navigator.platform) ? "linux" : "windows";
 let lookupTimer;
 let lookupSequence = 0;
+const PRICEABLE_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD"]);
 
 const patterns = [
   ["GPU", /(gpu|graphics card|graphics adapter|display adapter|video controller)(?:\s*[:=,-]\s*|\s+)(.+)/i],
@@ -66,6 +76,15 @@ function setOs(os) {
   scriptLabel.textContent = scripts[os].label;
   osTabs.forEach((tab) => tab.classList.toggle("active", tab.dataset.os === os));
   copyStatus.textContent = "Run the copied command in your terminal. Your report will be copied automatically.";
+}
+
+function setFlow(activeStep, complete = false) {
+  flowSteps.forEach((step) => {
+    const number = Number(step.dataset.flowStep);
+    step.classList.toggle("complete", complete || number < activeStep);
+    step.classList.toggle("active", !complete && number === activeStep);
+  });
+  progressBar.style.width = `${complete ? 100 : Math.max(8, ((activeStep - 1) / 3) * 100)}%`;
 }
 
 function escapeHtml(value) {
@@ -89,19 +108,43 @@ function parseReport(raw) {
   }).filter(Boolean);
 }
 
+function displayValue(type, value) {
+  if (type === "RAM" && /^\d+(?:\.\d+)?\s*GB$/i.test(value)) return `${value} · rerun for module details`;
+  return value;
+}
+
+function rowMarkup(item, index, state = "queued", label = state) {
+  const { type, value } = item;
+  const display = displayValue(type, value);
+  const infoOnly = type === "OS";
+  const rowState = infoOnly ? "info" : state;
+  const rowLabel = infoOnly ? "report only" : label;
+  return `<div class="result-row ${rowState}" data-result-index="${index}"><span class="result-type">${type}</span><span class="result-value" title="${escapeHtml(value)}">${escapeHtml(display)}</span><span class="price-links"><span class="check-state ${rowState}"><span class="state-dot"></span>${escapeHtml(rowLabel)}</span></span></div>`;
+}
+
+function updateRow(index, state, label) {
+  const row = results.querySelector(`[data-result-index="${index}"]`);
+  if (!row) return;
+  row.className = `result-row ${state}`;
+  const chip = row.querySelector(".check-state");
+  chip.className = `check-state ${state}`;
+  chip.innerHTML = `<span class="state-dot"></span>${escapeHtml(label)}`;
+}
+
 function render(items, source = "report") {
+  clearTimeout(lookupTimer);
+  const sequence = ++lookupSequence;
   if (!items.length) {
     results.innerHTML = `<div class="result-empty">No recognizable components yet. Paste the complete output from the command.</div>`;
     status.textContent = "nothing recognized";
+    setFlow(1);
     return;
   }
-  results.innerHTML = items.map(({ type, value }) => {
-    return `<div class="result-row"><span class="result-type">${type}</span><span class="result-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span><span class="price-link muted-link">checking…</span></div>`;
-  }).join("");
-  status.textContent = `${items.length} component${items.length === 1 ? "" : "s"} · checking prices`;
-  clearTimeout(lookupTimer);
-  const sequence = ++lookupSequence;
-  lookupTimer = setTimeout(() => lookupPrices(items, source, sequence), 350);
+  const priceableItems = items.filter(({ type }) => PRICEABLE_TYPES.has(type));
+  results.innerHTML = items.map((item, index) => rowMarkup(item, index)).join("");
+  status.textContent = `${items.length} detected · ${priceableItems.length} price check${priceableItems.length === 1 ? "" : "s"} queued`;
+  setFlow(2);
+  lookupTimer = setTimeout(() => lookupPrices(items, priceableItems, source, sequence), 350);
 }
 
 function offerMarkup(offer) {
@@ -111,27 +154,42 @@ function offerMarkup(offer) {
   return `<a class="price-link" href="${escapeHtml(offer.url)}" target="_blank" rel="noreferrer" title="${escapeHtml(offer.title)}">${escapeHtml(`${amount}${merchant}`)} ↗</a>`;
 }
 
-async function lookupPrices(items, source, sequence) {
+async function lookupPrices(items, priceableItems, source, sequence) {
+  if (!priceableItems.length) {
+    status.textContent = `${items.length} detected · report complete`;
+    setFlow(3, true);
+    return;
+  }
+  setFlow(3);
+  priceableItems.forEach((item) => updateRow(items.indexOf(item), "checking", "checking"));
+  status.textContent = `checking ${priceableItems.length} part${priceableItems.length === 1 ? "" : "s"} · live offers can take a moment`;
   try {
     const response = await fetch(PRICE_API_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ components: items.map(({ type, value }) => ({ type, name: value })) }),
+      body: JSON.stringify({ components: priceableItems.map(({ type, value }) => ({ type, name: value })) }),
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.message || payload.error || "Price service unavailable");
     if (sequence !== lookupSequence) return;
     const mapped = new Map(payload.results.map((result) => [`${result.type}:${result.name.toLowerCase()}`, result]));
-    results.innerHTML = items.map(({ type, value }) => {
+    results.innerHTML = items.map((item, index) => {
+      const { type, value } = item;
+      if (!PRICEABLE_TYPES.has(type)) return rowMarkup(item, index, "info", "report only");
       const result = mapped.get(`${type}:${value.toLowerCase()}`);
-      const action = result?.offers?.length ? result.offers.slice(0, 2).map(offerMarkup).join("") : `<span class="price-link muted-link">${result?.status === "unsupported" ? "not tracked" : "no match"}</span>`;
-      return `<div class="result-row"><span class="result-type">${type}</span><span class="result-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span><span class="price-links">${action}</span></div>`;
+      if (result?.offers?.length) {
+        const action = result.offers.slice(0, 2).map(offerMarkup).join("");
+        return `<div class="result-row done" data-result-index="${index}"><span class="result-type">${type}</span><span class="result-value" title="${escapeHtml(value)}">${escapeHtml(displayValue(type, value))}</span><span class="price-links">${action}</span></div>`;
+      }
+      return rowMarkup(item, index, "done", result?.status === "unsupported" ? "not tracked" : "no match");
     }).join("");
-    status.textContent = `${items.length} component${items.length === 1 ? "" : "s"} · ${source}`;
+    status.textContent = `${items.length} detected · prices ready · ${source}`;
+    setFlow(3, true);
   } catch (error) {
     if (sequence !== lookupSequence) return;
-    results.innerHTML = items.map(({ type, value }) => `<div class="result-row"><span class="result-type">${type}</span><span class="result-value" title="${escapeHtml(value)}">${escapeHtml(value)}</span><span class="price-link muted-link">price service unavailable</span></div>`).join("");
+    priceableItems.forEach((item) => updateRow(items.indexOf(item), "error", "service unavailable"));
     status.textContent = error instanceof Error ? error.message : "price service unavailable";
+    setFlow(3);
   }
 }
 
@@ -144,6 +202,7 @@ copyScript.addEventListener("click", async () => {
     await navigator.clipboard.writeText(scripts[selectedOs].code);
     copyScript.textContent = "Copied";
     copyStatus.textContent = "Copied. Run it in your terminal, then paste the report on the right.";
+    setFlow(1);
     setTimeout(() => { copyScript.textContent = "Copy command"; }, 1400);
   } catch { copyStatus.textContent = "Copy was blocked. Select the command text and copy it manually."; }
 });
