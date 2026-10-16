@@ -3,22 +3,17 @@ const MAX_UPSTREAM_BYTES = 256 * 1024;
 const MAX_COMPONENTS = 16;
 const REQUEST_TIMEOUT_MS = 90_000;
 const CACHE_TTL_SECONDS = 600;
-const CACHE_SCHEMA_VERSION = "relevance-v1";
+const CACHE_SCHEMA_VERSION = "alternatives-v2";
 const DEFAULT_PRICES_API_BASE = "https://api.pricesapi.io/api/v1";
 const PRICEABLE_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD"]);
-const RELEVANCE_STOP_WORDS = new Set([
-  "AMD", "INTEL", "NVIDIA", "ASUS", "ASUSTEK", "MSI", "GIGABYTE", "ASROCK", "BIOSTAR", "EVGA",
-  "INC", "CORP", "CORPORATION", "COMPUTER", "TECHNOLOGY", "SYSTEM", "SYSTEMS", "THE",
-  "WITH", "GB", "TB", "MB", "MHZ", "DDR", "RAM", "MEMORY", "MODEL", "NAME", "UNKNOWN",
-  "DESKTOP", "PROCESSOR", "GRAPHICS", "CARD", "SOLID", "STATE", "DRIVE", "DISK",
-]);
-
 const ALL_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD", "OS"]);
 
 type ComponentType = "CPU" | "GPU" | "RAM" | "STORAGE" | "MOTHERBOARD" | "OS";
 type Component = { type: ComponentType; name: string };
-type Offer = { title: string; price: number | null; currency: string | null; merchant: string | null; available: boolean | null; stock: string | null; delivery: string | null; url: string | null };
+type Offer = { title: string; price: number | null; currency: string | null; merchant: string | null; available: boolean | null; stock: string | null; delivery: string | null; url: string | null; matchType: "exact" | "similar"; matchLabel: string };
 type PriceResult = { type: ComponentType; name: string; status: "ok" | "no_match" | "unsupported"; offers: Offer[] };
+type SearchPlan = { query: string; exactModel: string | null; label: string };
+type Match = { matchType: "exact" | "similar"; matchLabel: string };
 type ApiError = Error & { status?: number; code?: string };
 
 export default {
@@ -53,7 +48,7 @@ async function handlePriceCheck(request: Request, env: Env, ctx: ExecutionContex
       return json(cachedPayload, 200, cors, { "Cache-Control": `public, max-age=${CACHE_TTL_SECONDS}` });
     }
 
-    const results = await Promise.all(components.map((component) => lookupComponent(component, env)));
+    const results = await Promise.all(components.map((component) => lookupComponent(component, components, env)));
     const responsePayload = { provider: "pricesapi", market, generatedAt: new Date().toISOString(), results };
     const cachedResponse = json(responsePayload, 200, new Headers(), { "Cache-Control": `public, max-age=${CACHE_TTL_SECONDS}` });
     ctx.waitUntil(caches.default.put(cacheKey, cachedResponse));
@@ -68,12 +63,13 @@ async function handlePriceCheck(request: Request, env: Env, ctx: ExecutionContex
   }
 }
 
-async function lookupComponent(component: Component, env: Env): Promise<PriceResult> {
+async function lookupComponent(component: Component, components: Component[], env: Env): Promise<PriceResult> {
   if (!PRICEABLE_TYPES.has(component.type)) return { ...component, status: "unsupported", offers: [] };
 
+  const plan = buildSearchPlan(component, components);
   const apiBase = env.PRICES_API_BASE || DEFAULT_PRICES_API_BASE;
   const endpoint = new URL(`${apiBase.replace(/\/$/, "")}/products/search`);
-  endpoint.searchParams.set("q", component.name);
+  endpoint.searchParams.set("q", plan.query);
   endpoint.searchParams.set("market", env.PRICES_API_MARKET || "de");
   endpoint.searchParams.set("limit", "3");
   endpoint.searchParams.set("offers_limit", "5");
@@ -92,13 +88,15 @@ async function lookupComponent(component: Component, env: Env): Promise<PriceRes
     return product.offers
       .map((offer) => {
         const offerTitle = isRecord(offer) ? stringValue(offer.product_title) || fallbackTitle : fallbackTitle;
-        if (!isRelevantProduct(component, offerTitle)) return null;
-        return normalizeOffer(offer, fallbackTitle);
+        const match = matchProduct(component, components, plan, offerTitle);
+        if (!match) return null;
+        return normalizeOffer(offer, fallbackTitle, match);
       })
       .filter((item): item is Offer => item !== null);
   });
-  offers.sort((a, b) => (a.price ?? Number.POSITIVE_INFINITY) - (b.price ?? Number.POSITIVE_INFINITY));
-  return { ...component, status: offers.length ? "ok" : "no_match", offers: offers.slice(0, 5) };
+  const uniqueOffers = [...new Map(offers.map((offer) => [offer.url || `${offer.title}:${offer.price}:${offer.merchant}`, offer])).values()];
+  uniqueOffers.sort((a, b) => Number(b.matchType === "exact") - Number(a.matchType === "exact") || Number(b.available === true) - Number(a.available === true) || (a.price ?? Number.POSITIVE_INFINITY) - (b.price ?? Number.POSITIVE_INFINITY));
+  return { ...component, status: uniqueOffers.length ? "ok" : "no_match", offers: uniqueOffers.slice(0, 5) };
 }
 
 function normalizeComponents(payload: unknown): Component[] {
@@ -118,7 +116,7 @@ function normalizeComponents(payload: unknown): Component[] {
   return components;
 }
 
-function normalizeOffer(value: unknown, fallbackTitle: string): Offer | null {
+function normalizeOffer(value: unknown, fallbackTitle: string, match: Match): Offer | null {
   if (!isRecord(value)) return null;
   const title = stringValue(value.product_title) || fallbackTitle;
   const priceValue = value.price;
@@ -128,32 +126,251 @@ function normalizeOffer(value: unknown, fallbackTitle: string): Offer | null {
   const delivery = stringValue(value.delivery_info);
   const url = safeUrl(stringValue(value.url));
   const available = stock ? !/out of stock|unavailable/i.test(stock) : null;
-  return { title, price: price !== null && Number.isFinite(price) ? price : null, currency: stringValue(value.currency), merchant, available, stock, delivery, url };
+  return { title, price: price !== null && Number.isFinite(price) ? price : null, currency: stringValue(value.currency), merchant, available, stock, delivery, url, ...match };
 }
 
-function isRelevantProduct(component: Component, productTitle: string): boolean {
-  const queryTokens = relevanceTokens(component.name);
-  const titleTokens = new Set(relevanceTokens(productTitle));
-  if (!queryTokens.length || !titleTokens.size) return false;
-
-  const matchingTokens = queryTokens.filter((token) => titleTokens.has(token));
-  const hasStrongModelToken = queryTokens.some((token) => /\d/.test(token) && token.length >= 4 && titleTokens.has(token));
-
-  if (component.type === "MOTHERBOARD") {
-    const hasBoardSignal = /motherboard|mainboard|baseboard|\batx\b|micro[- ]?atx|mini[- ]?itx|chipset|socket/i.test(productTitle);
-    return hasStrongModelToken && hasBoardSignal;
+function buildSearchPlan(component: Component, components: Component[]): SearchPlan {
+  if (component.type === "GPU") {
+    const model = gpuModel(component.name);
+    if (model) {
+      const vram = memoryCapacityGb(component.name);
+      return { query: `${model}${vram ? ` ${vram}GB` : ""} graphics card`, exactModel: model, label: "same GPU chip" };
+    }
   }
 
-  if (component.type === "RAM" || component.type === "STORAGE") return hasStrongModelToken || matchingTokens.length >= 2;
-  return hasStrongModelToken || matchingTokens.length >= Math.min(2, queryTokens.length);
+  if (component.type === "CPU") {
+    const socket = cpuSocket(component.name);
+    if (socket) {
+      const tier = component.name.match(/\bCore\s+Ultra\s+[579]\b/i)?.[0] || component.name.match(/\bRyzen\s+[3579]\b/i)?.[0] || component.name.match(/\bCore\s+i[3579]\b/i)?.[0] || "desktop CPU";
+      return { query: `${tier} ${socket} processor`, exactModel: cpuModel(component.name), label: `${socket} · similar CPU` };
+    }
+  }
+
+  if (component.type === "RAM") {
+    const capacity = memoryCapacityGb(component.name);
+    const generation = memoryGeneration(component.name);
+    if (capacity) {
+      const speed = memorySpeed(component.name);
+      const parts = [formatCapacity(capacity), generation, speed, "desktop RAM"].filter(Boolean);
+      return { query: parts.join(" "), exactModel: null, label: [formatCapacity(capacity), generation, "memory"].filter(Boolean).join(" ") };
+    }
+  }
+
+  if (component.type === "STORAGE") {
+    const capacity = storageCapacity(component.name);
+    if (capacity) {
+      const technology = storageTechnology(component.name);
+      return { query: `${formatCapacity(capacity)} ${technology}`, exactModel: null, label: `${formatCapacity(capacity)} · ${technology}` };
+    }
+  }
+
+  if (component.type === "MOTHERBOARD") {
+    const cpu = components.find((candidate) => candidate.type === "CPU");
+    const socket = cpu ? cpuSocket(cpu.name) : null;
+    if (socket) {
+      const ram = components.find((candidate) => candidate.type === "RAM");
+      const actualMemory = ram ? memoryGeneration(ram.name) : null;
+      const platformMemory = socketMemoryGeneration(socket);
+      const memoryNote = platformMemory && actualMemory && actualMemory !== platformMemory
+        ? `${platformMemory} RAM needed`
+        : platformMemory || actualMemory;
+      return { query: `${socket} motherboard`, exactModel: null, label: [socket, memoryNote, "verify CPU/case fit"].filter(Boolean).join(" · ") };
+    }
+  }
+
+  return { query: component.name, exactModel: component.name, label: "same model" };
 }
 
-function relevanceTokens(value: string): string[] {
-  return value
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, " ")
-    .split(/\s+/)
-    .filter((token) => token.length >= 3 && !RELEVANCE_STOP_WORDS.has(token));
+function matchProduct(component: Component, components: Component[], plan: SearchPlan, title: string): Match | null {
+  if (!title || title === "Untitled product") return null;
+
+  if (component.type === "GPU") {
+    if (!plan.exactModel || !matchesGpuModel(plan.exactModel, title) || !/\b(?:geforce|radeon|graphics|\bRTX\b|\bGTX\b|\bRX\b|\bARC\b)/i.test(title)) return null;
+    const expectedVram = memoryCapacityGb(component.name);
+    const foundVram = memoryCapacityGb(title);
+    if (expectedVram && foundVram && !sameCapacity(expectedVram, foundVram)) return null;
+    return { matchType: "similar", matchLabel: plan.label };
+  }
+
+  if (component.type === "CPU") {
+    const exact = plan.exactModel ? matchesCpuModel(plan.exactModel, title) : false;
+    if (exact) return { matchType: "exact", matchLabel: "same CPU model" };
+    const expectedSocket = cpuSocket(component.name);
+    const productSocket = cpuSocket(title);
+    if (expectedSocket && productSocket === expectedSocket && /\b(?:processor|CPU|Ryzen|Core|Xeon)\b/i.test(title)) return { matchType: "similar", matchLabel: plan.label };
+    return null;
+  }
+
+  if (component.type === "RAM") {
+    const expectedCapacity = memoryCapacityGb(component.name);
+    const foundCapacity = memoryCapacityGb(title);
+    const expectedGeneration = memoryGeneration(component.name);
+    const foundGeneration = memoryGeneration(title);
+    const foundSpeed = memorySpeed(title);
+    if (!expectedCapacity || !foundCapacity || !sameCapacity(expectedCapacity, foundCapacity)) return null;
+    if (expectedGeneration && expectedGeneration !== foundGeneration) return null;
+    if (!/\b(?:RAM|memory|DIMM|DDR[345])\b/i.test(title)) return null;
+    return { matchType: "similar", matchLabel: [formatCapacity(foundCapacity), foundGeneration || expectedGeneration, foundSpeed, "RAM"].filter(Boolean).join(" ") };
+  }
+
+  if (component.type === "STORAGE") {
+    const expectedCapacity = storageCapacity(component.name);
+    const foundCapacity = storageCapacity(title);
+    const expectedTechnology = storageTechnology(component.name);
+    if (!expectedCapacity || !foundCapacity || !sameCapacity(expectedCapacity, foundCapacity)) return null;
+    if (expectedTechnology === "NVMe SSD" && !/\b(?:NVMe|PCIe|M\.2)\b/i.test(title)) return null;
+    if (expectedTechnology === "SATA SSD" && !/\b(?:SATA|2\.5|SSD)\b/i.test(title)) return null;
+    if (!/\b(?:SSD|HDD|hard drive|solid state|NVMe)\b/i.test(title)) return null;
+    return { matchType: "similar", matchLabel: `${formatCapacity(foundCapacity)} · ${expectedTechnology}` };
+  }
+
+  if (component.type === "MOTHERBOARD") {
+    const cpu = components.find((candidate) => candidate.type === "CPU");
+    const socket = cpu ? cpuSocket(cpu.name) : null;
+    if (socket) {
+      if (!/\b(?:motherboard|mainboard|baseboard|ATX|ITX|chipset|Z\d{3,4}|B\d{3,4}|H\d{3,4}|X\d{3,4}|A\d{3,4})\b/i.test(title)) return null;
+      if (boardSocket(title) !== socket) return null;
+      return { matchType: "similar", matchLabel: plan.label };
+    }
+    if (!/\b(?:motherboard|mainboard|baseboard|ATX|ITX|chipset|socket)\b/i.test(title)) return null;
+  }
+
+  const required = modelTokens(component.name);
+  const candidates = new Set(modelTokens(title));
+  if (!required.length || !required.some((token) => candidates.has(token))) return null;
+  return { matchType: "exact", matchLabel: plan.label };
+}
+
+function gpuModel(value: string): string | null {
+  const match = value.match(/\b(RTX|GTX)\s*-?\s*(\d{3,4})(?:\s*(TI|SUPER))?\b/i) || value.match(/\b(RX)\s*-?\s*(\d{4})(?:\s*(XT|XTX|GRE))?\b/i) || value.match(/\b(ARC)\s*(A\d{3,4})\b/i);
+  if (!match) return null;
+  return match.slice(1).filter(Boolean).join(" ").toUpperCase().replace(/\s+/g, " ");
+}
+
+function matchesGpuModel(model: string, title: string): boolean {
+  const tokens = model.toUpperCase().match(/RTX|GTX|RX|ARC|SUPER|TI|XTX|XT|GRE|A\d{3,4}|\d{3,4}/g) || [];
+  if (tokens.length < 2) return false;
+  const [family, number, suffix] = tokens;
+  const escaped = number.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const suffixPattern = suffix ? `\\s*${suffix}` : "(?!\\s*(?:TI|SUPER|XT|XTX|GRE)\\b)";
+  return new RegExp(`\\b${family}\\s*${escaped}${suffixPattern}\\b`, "i").test(title.replace(/-/g, " "));
+}
+
+function cpuModel(value: string): string | null {
+  return value.match(/\b(?:i[3579]-?\d{4,5}[A-Z]{0,3}|\d{3,5}(?:X3D|XT|KF|KS|K|X|F|G)?|[3579]-\d{4,5}[A-Z]{0,3})\b/i)?.[0] || null;
+}
+
+function matchesCpuModel(model: string, title: string): boolean {
+  const escaped = model.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`, "i").test(title);
+}
+
+function cpuSocket(value: string): string | null {
+  const text = value.toUpperCase();
+  if (/\bCORE\s+ULTRA\s+[579]\s+2\d{2}[A-Z]*\b/.test(text) || /\bCORE\s+[579]\s+2\d{2}[A-Z]*\b/.test(text)) return "LGA1851";
+  const intel = text.match(/\bI[3579]-?([89]|1[0-4])\d{3,4}[A-Z]{0,2}\b/);
+  if (intel) {
+    const series = Number(intel[1]);
+    if (series >= 12) return "LGA1700";
+    if (series >= 10) return "LGA1200";
+    if (series >= 8) return "LGA1151";
+  }
+  const ryzen = text.match(/\bRYZEN\s+[3579]\s+(\d{4}[A-Z0-9]*)\b/);
+  if (ryzen) {
+    const series = Number(ryzen[1][0]);
+    if (series >= 7 && series <= 9) return "AM5";
+    if (series >= 1 && series <= 5) return "AM4";
+  }
+  return null;
+}
+
+function boardSocket(title: string): string | null {
+  const text = title.toUpperCase().replace(/\s+/g, " ");
+  const sockets = ["LGA1851", "LGA1700", "LGA1200", "LGA1151", "AM5", "AM4"];
+  for (const socket of sockets) {
+    const chipsetMap: Record<string, RegExp> = {
+      LGA1851: /\b(?:Z890|B860|H810|Q870|W880)\b/,
+      LGA1700: /\b(?:Z790|H770|B760|Z690|H670|B660|H610|Q670|W680)\b/,
+      LGA1200: /\b(?:Z590|B560|H510|Z490|B460|H410|H570)\b/,
+      LGA1151: /\b(?:Z390|Z370|B365|B360|H370|H310|Q370)\b/,
+      AM5: /\b(?:X870E?|X670E?|B850|B840|B650E?|A620)\b/,
+      AM4: /\b(?:X570|B550|A520|X470|B450|A320|X370|B350)\b/,
+    };
+    const explicit = socket === "AM5" || socket === "AM4"
+      ? new RegExp(`\\b${socket}\\b`)
+      : new RegExp(`\\b${socket.slice(0, 3)}\\s*${socket.slice(3)}\\b`);
+    if (explicit.test(text) || chipsetMap[socket].test(text)) return socket;
+  }
+  return null;
+}
+
+function socketMemoryGeneration(socket: string): string | null {
+  if (socket === "LGA1851" || socket === "AM5") return "DDR5";
+  if (socket === "AM4" || socket === "LGA1200" || socket === "LGA1151") return "DDR4";
+  return null;
+}
+
+function memoryCapacityGb(value: string): number | null {
+  const explicit = value.match(/\b(?:total|installed)\s*[:=]?\s*(\d+(?:\.\d+)?)\s*(GB|GiB)\b|\b(\d+(?:\.\d+)?)\s*(GB|GiB)\s*(?:total|installed)\b/i);
+  if (explicit) return Number(explicit[1] || explicit[3]);
+  const kit = value.match(/\b(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*(GB|GiB)\b/i);
+  if (kit) return Number(kit[1]) * Number(kit[2]);
+  const labeled = [...value.matchAll(/\bSize\s*[:=]\s*(\d+(?:\.\d+)?)\s*(GB|GiB|MB|MiB)\b/gi)];
+  if (labeled.length) return labeled.reduce((sum, item) => sum + capacityInGb(Number(item[1]), item[2]), 0);
+  const moduleGroups = value.split(/\s*\|\s*/);
+  if (moduleGroups.length > 1) {
+    const total = moduleGroups.reduce((sum, group) => {
+      const sizes = [...group.matchAll(/\b(\d+(?:\.\d+)?)\s*(GB|GiB)\b/gi)].map((item) => Number(item[1]));
+      return sum + (sizes.length ? Math.max(...sizes) : 0);
+    }, 0);
+    if (total) return total;
+  }
+  const sizes = [...value.matchAll(/\b(\d+(?:\.\d+)?)\s*(GB|GiB)\b/gi)].map((item) => Number(item[1]));
+  return sizes.length ? Math.max(...sizes) : null;
+}
+
+function memoryGeneration(value: string): string | null {
+  const match = value.match(/\bDDR\s*([345])\b/i) || value.match(/\bPC([345])\b/i);
+  return match ? `DDR${match[1]}` : null;
+}
+
+function memorySpeed(value: string): string | null {
+  const match = value.match(/\b(\d{3,5})\s*MHz\b/i);
+  return match ? `${match[1]}MHz` : null;
+}
+
+function storageCapacity(value: string): number | null {
+  const matches = [...value.matchAll(/\b(\d+(?:\.\d+)?)\s*(TB|TiB|GB|GiB)\b/gi)];
+  if (!matches.length) return null;
+  const capacities = matches.map((item) => capacityInGb(Number(item[1]), item[2]));
+  return Math.max(...capacities);
+}
+
+function storageTechnology(value: string): string {
+  if (/\b(?:NVMe|PCIe|M\.2)\b|\b(?:MZVL|MZVP|MZVLB)/i.test(value)) return "NVMe SSD";
+  if (/\b(?:HDD|hard drive|5400\s*rpm|7200\s*rpm)\b/i.test(value)) return "hard drive";
+  if (/\bSATA\b/i.test(value)) return "SATA SSD";
+  return "SSD";
+}
+
+function capacityInGb(value: number, unit: string): number {
+  return /^(?:TB|TiB)$/i.test(unit) ? value * 1000 : /^(?:MB|MiB)$/i.test(unit) ? value / 1024 : value;
+}
+
+function formatCapacity(gb: number): string {
+  const nominal = [128, 256, 512, 1000, 2000, 4000, 8000].find((value) => Math.abs(gb - value) / value <= 0.12);
+  const normalized = nominal || Math.round(gb);
+  return normalized >= 1000 ? `${normalized / 1000}TB` : `${normalized}GB`;
+}
+
+function sameCapacity(expected: number, found: number): boolean {
+  const normalizedExpected = Number.parseFloat(formatCapacity(expected)) * (formatCapacity(expected).endsWith("TB") ? 1000 : 1);
+  const normalizedFound = Number.parseFloat(formatCapacity(found)) * (formatCapacity(found).endsWith("TB") ? 1000 : 1);
+  return Math.abs(normalizedExpected - normalizedFound) / Math.max(normalizedExpected, normalizedFound) <= 0.12;
+}
+
+function modelTokens(value: string): string[] {
+  return value.toUpperCase().replace(/[^A-Z0-9]+/g, " ").split(/\s+/).filter((token) => /\d/.test(token) && token.length >= 4);
 }
 
 function safeUrl(value: string | null): string | null {

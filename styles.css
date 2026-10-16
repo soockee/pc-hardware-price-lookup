@@ -23,3 +23,9 @@ textarea { display: block; width: 100%; margin-top: 22px; padding: 12px; resize:
 footer { border-top: 1px solid #d4d4d0; } footer a { color: #555550; } footer a:hover { color: #171717; }
 @media (max-width: 760px) { body { overflow: auto; }.app { width: min(100% - 24px, 560px); grid-template-rows: 56px auto 48px; }.workspace { grid-template-columns: 1fr; align-self: start; padding: 16px 0; }.report-panel, .check-panel { min-height: auto; padding: 20px; }.script-box { max-height: none; }.flow { gap: 5px; }.flow-step span { display: none; }.result-row { grid-template-columns: 58px 1fr; }.price-links { grid-column: 2; justify-content: start; }.result-value { white-space: normal; }.results-heading { align-items: start; flex-direction: column; gap: 7px; }.status { text-align: left; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
+.price-link { display: grid; min-width: 142px; max-width: 190px; gap: 3px; text-align: left; white-space: normal; }
+.offer-main { font-weight: 650; }
+.offer-title { display: -webkit-box; overflow: hidden; color: #4f4f4a; font-size: .56rem; line-height: 1.35; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.offer-match, .offer-merchant { overflow: hidden; color: #777772; font-size: .55rem; text-overflow: ellipsis; }
+.offer-match { text-transform: uppercase; letter-spacing: .035em; }
+.price-link:hover .offer-title, .price-link:hover .offer-match, .price-link:hover .offer-merchant { color: #d7d7d2; }

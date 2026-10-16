@@ -3,17 +3,21 @@ const scripts = {
     label: "Windows PowerShell",
     code: `$cpu = Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name
 $gpu = (Get-CimInstance Win32_VideoController | Where-Object Name | Select-Object -ExpandProperty Name) -join ", "
-$ram = (Get-CimInstance Win32_PhysicalMemory | ForEach-Object {
+$modules = @(Get-CimInstance Win32_PhysicalMemory)
+$ramTotal = [math]::Round((($modules | Measure-Object -Property Capacity -Sum).Sum) / 1GB, 1)
+$ramParts = $modules | ForEach-Object {
   $size = [math]::Round($_.Capacity / 1GB, 2)
   $speed = if ($_.ConfiguredClockSpeed) { $_.ConfiguredClockSpeed } elseif ($_.Speed) { $_.Speed } else { "?" }
+  $type = switch ([int]$_.SMBIOSMemoryType) { 24 { "DDR3" } 26 { "DDR4" } 34 { "DDR5" } default { "RAM" } }
   $manufacturer = if ($_.Manufacturer) { $_.Manufacturer.Trim() } else { "unknown manufacturer" }
   $part = if ($_.PartNumber) { $_.PartNumber.Trim() } else { "unknown part" }
-  "$size GB; $speed MHz; $manufacturer; $part"
-}) -join " | "
+  "$size GB $type; $speed MHz; $manufacturer; $part"
+}
+$ram = if ($modules.Count) { "$ramTotal GB total; $($ramParts -join ' | ')" } else { "details unavailable" }
 $storage = (Get-CimInstance Win32_DiskDrive | Where-Object Model | ForEach-Object { "$($_.Model) $([math]::Round($_.Size / 1GB)) GB" }) -join "; "
 $board = (Get-CimInstance Win32_BaseBoard | ForEach-Object { "$($_.Manufacturer) $($_.Product)" }) -join "; "
 $os = (Get-CimInstance Win32_OperatingSystem).Caption
-$report = "CPU: $cpu\`nGPU: $gpu\`nRAM: $ram GB\`nSTORAGE: $storage\`nMOTHERBOARD: $board\`nOS: $os"
+$report = "CPU: $cpu\`nGPU: $gpu\`nRAM: $ram\`nSTORAGE: $storage\`nMOTHERBOARD: $board\`nOS: $os"
 Set-Clipboard -Value $report
 $report`,
   },
@@ -34,7 +38,7 @@ printf '%s\\n' "$report"`,
     code: `cpu=$(lscpu | sed -n 's/^Model name:[[:space:]]*//p' | head -n 1)
 gpu=$(lspci 2>/dev/null | grep -Ei 'VGA|3D|Display' | sed 's/^[^:]*: //' | paste -sd ', ' -)
 ram=$(sudo -n dmidecode --type memory 2>/dev/null | awk -F: '/^[[:space:]]*(Size|Type|Speed|Manufacturer|Part Number):/{gsub(/^[ \t]+/, "", $2); if (out != "") out=out "; "; out=out $1 "=" $2} END {print out}')
-[ -n "$ram" ] || ram=$(free -h | awk '/^Mem:/{print $2}')
+[ -n "$ram" ] || ram=$(free -b | awk '/^Mem:/{printf "%.0f GB total", $2/1024/1024/1024}')
 storage=$(lsblk -dn -o MODEL,SIZE,TYPE 2>/dev/null | awk '$NF=="disk" { $NF=""; sub(/[ \\t]+$/, ""); print }' | paste -sd '; ' -)
 board=$(cat /sys/devices/virtual/dmi/id/board_vendor /sys/devices/virtual/dmi/id/board_name 2>/dev/null | paste -sd ' ' -)
 os=$( . /etc/os-release 2>/dev/null && printf '%s' "$PRETTY_NAME" )
@@ -150,8 +154,10 @@ function render(items, source = "report") {
 function offerMarkup(offer) {
   if (!offer.url) return `<span class="price-link muted-link">no link</span>`;
   const amount = offer.price === null ? "view offer" : `${offer.currency || ""} ${Number(offer.price).toFixed(2)}`.trim();
-  const merchant = offer.merchant ? ` · ${offer.merchant}` : "";
-  return `<a class="price-link" href="${escapeHtml(offer.url)}" target="_blank" rel="noreferrer" title="${escapeHtml(offer.title)}">${escapeHtml(`${amount}${merchant}`)} ↗</a>`;
+  const merchant = offer.merchant ? `<span class="offer-merchant">${escapeHtml(offer.merchant)}</span>` : "";
+  const match = offer.matchLabel ? `<span class="offer-match">${escapeHtml(offer.matchLabel)}</span>` : "";
+  const title = offer.title ? `<span class="offer-title">${escapeHtml(offer.title)}</span>` : "";
+  return `<a class="price-link" href="${escapeHtml(offer.url)}" target="_blank" rel="noreferrer" title="${escapeHtml(offer.title)}"><span class="offer-main">${escapeHtml(amount)} ↗</span>${title}${match}${merchant}</a>`;
 }
 
 async function lookupPrices(items, priceableItems, source, sequence) {
@@ -162,7 +168,7 @@ async function lookupPrices(items, priceableItems, source, sequence) {
   }
   setFlow(3);
   priceableItems.forEach((item) => updateRow(items.indexOf(item), "checking", "checking"));
-  status.textContent = `checking ${priceableItems.length} part${priceableItems.length === 1 ? "" : "s"} · live offers can take a moment`;
+  status.textContent = `checking ${priceableItems.length} part${priceableItems.length === 1 ? "" : "s"} · finding comparable offers`;
   try {
     const response = await fetch(PRICE_API_URL, {
       method: "POST",
@@ -181,9 +187,9 @@ async function lookupPrices(items, priceableItems, source, sequence) {
         const action = result.offers.slice(0, 2).map(offerMarkup).join("");
         return `<div class="result-row done" data-result-index="${index}"><span class="result-type">${type}</span><span class="result-value" title="${escapeHtml(value)}">${escapeHtml(displayValue(type, value))}</span><span class="price-links">${action}</span></div>`;
       }
-      return rowMarkup(item, index, "done", result?.status === "unsupported" ? "not tracked" : "no match");
+      return rowMarkup(item, index, "done", result?.status === "unsupported" ? "not tracked" : "no comparable offer");
     }).join("");
-    status.textContent = `${items.length} detected · prices ready · ${source}`;
+    status.textContent = `${items.length} detected · offers ready · ${source}`;
     setFlow(3, true);
   } catch (error) {
     if (sequence !== lookupSequence) return;

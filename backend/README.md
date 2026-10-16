@@ -7,7 +7,7 @@ Small Cloudflare Worker backend for the GitHub Pages frontend. It accepts the lo
 - `GET /health` — configuration-safe health response.
 - `POST /v1/price-check` — accepts `{ "components": [{ "type": "GPU", "name": "..." }] }` and returns normalized offers.
 
-The API searches price-relevant component types (`CPU`, `GPU`, `RAM`, `STORAGE`, and `MOTHERBOARD`). OS data remains visible in the report but is intentionally excluded from pricing. Components with no relevant offers return `no_match` rather than fabricated pricing.
+The API searches price-relevant component types (`CPU`, `GPU`, `RAM`, `STORAGE`, and `MOTHERBOARD`). Search terms preserve the useful comparison details: GPU model, CPU socket and tier, installed RAM capacity/generation/speed, storage capacity/interface, and motherboard socket inferred from the CPU. Each offer includes a short label explaining the match. Motherboard suggestions use CPU socket and chipset data; case and OEM fit still need checking. OS data remains visible in the report but is intentionally excluded from pricing. Components with no relevant offers return `no_match` rather than fabricated pricing.
 
 ## Local setup
 
