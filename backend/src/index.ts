@@ -1,14 +1,15 @@
 const MAX_REQUEST_BYTES = 16 * 1024;
 const MAX_UPSTREAM_BYTES = 256 * 1024;
 const MAX_COMPONENTS = 16;
-const REQUEST_TIMEOUT_MS = 8_000;
+const REQUEST_TIMEOUT_MS = 90_000;
 const CACHE_TTL_SECONDS = 600;
+const DEFAULT_PRICES_API_BASE = "https://api.pricesapi.io/api/v1";
 
 const ALL_TYPES = new Set(["CPU", "GPU", "RAM", "STORAGE", "MOTHERBOARD", "OS"]);
 
 type ComponentType = "CPU" | "GPU" | "RAM" | "STORAGE" | "MOTHERBOARD" | "OS";
 type Component = { type: ComponentType; name: string };
-type Offer = { title: string; price: number | null; currency: string | null; merchant: string | null; available: boolean | null; url: string | null };
+type Offer = { title: string; price: number | null; currency: string | null; merchant: string | null; available: boolean | null; stock: string | null; delivery: string | null; url: string | null };
 type PriceResult = { type: ComponentType; name: string; status: "ok" | "no_match" | "unsupported"; offers: Offer[] };
 type ApiError = Error & { status?: number; code?: string };
 
@@ -22,7 +23,7 @@ export default {
 
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ ok: true, service: "rigcheck-price-api", provider: "kelkoo", providerConfigured: Boolean(env.KELKOO_TOKEN), timestamp: new Date().toISOString() }, 200, cors, { "Cache-Control": "no-store" });
+      return json({ ok: true, service: "rigcheck-price-api", provider: "pricesapi", providerConfigured: Boolean(env.PRICES_API_KEY), timestamp: new Date().toISOString() }, 200, cors, { "Cache-Control": "no-store" });
     }
     if (request.method === "POST" && url.pathname === "/v1/price-check") return handlePriceCheck(request, env, ctx, cors);
     if (request.method === "GET" && url.pathname === "/") return json({ service: "rigcheck-price-api", endpoints: ["GET /health", "POST /v1/price-check"] }, 200, cors);
@@ -34,10 +35,10 @@ async function handlePriceCheck(request: Request, env: Env, ctx: ExecutionContex
   const requestId = crypto.randomUUID();
   try {
     const components = normalizeComponents(await readJsonBody(request, MAX_REQUEST_BYTES));
-    if (!env.KELKOO_TOKEN) return json({ error: "provider_not_configured", message: "KELKOO_TOKEN is not configured.", requestId }, 503, cors);
+    if (!env.PRICES_API_KEY) return json({ error: "provider_not_configured", message: "PRICES_API_KEY is not configured.", requestId }, 503, cors);
 
-    const country = env.KELKOO_COUNTRY || "de";
-    const cacheKey = new Request(`https://cache.rigcheck.invalid/v1/price-check?country=${country}&components=${encodeURIComponent(JSON.stringify(components))}`);
+    const market = env.PRICES_API_MARKET || "de";
+    const cacheKey = new Request(`https://cache.rigcheck.invalid/v1/price-check?market=${market}&components=${encodeURIComponent(JSON.stringify(components))}`);
     const cached = await caches.default.match(cacheKey);
     if (cached) {
       const cachedPayload = await readJsonResponse(cached, MAX_UPSTREAM_BYTES);
@@ -45,7 +46,7 @@ async function handlePriceCheck(request: Request, env: Env, ctx: ExecutionContex
     }
 
     const results = await Promise.all(components.map((component) => lookupComponent(component, env)));
-    const responsePayload = { provider: "kelkoo", country, generatedAt: new Date().toISOString(), results };
+    const responsePayload = { provider: "pricesapi", market, generatedAt: new Date().toISOString(), results };
     const cachedResponse = json(responsePayload, 200, new Headers(), { "Cache-Control": `public, max-age=${CACHE_TTL_SECONDS}` });
     ctx.waitUntil(caches.default.put(cacheKey, cachedResponse));
     console.log(JSON.stringify({ event: "price_check", requestId, componentTypes: components.map(({ type }) => type), resultCount: results.length }));
@@ -60,25 +61,26 @@ async function handlePriceCheck(request: Request, env: Env, ctx: ExecutionContex
 }
 
 async function lookupComponent(component: Component, env: Env): Promise<PriceResult> {
-  const apiBase = env.KELKOO_API_BASE || "https://api.kelkoogroup.net/publisher/shopping/v2";
-  const endpoint = new URL(`${apiBase.replace(/\/$/, "")}/search/offers`);
-  endpoint.searchParams.set("country", env.KELKOO_COUNTRY || "de");
-  endpoint.searchParams.set("query", component.name);
-  endpoint.searchParams.set("queryMatchStrength", "all");
-  endpoint.searchParams.set("fieldsAlias", "minimal");
-  endpoint.searchParams.set("additionalFields", "offerId,lastUpdateDate,price,currency,merchantName,offerUrlLandingUrl,goUrl");
-  endpoint.searchParams.set("sortBy", "price");
-  endpoint.searchParams.set("sortDirection", "asc");
-  endpoint.searchParams.set("pageSize", "5");
+  const apiBase = env.PRICES_API_BASE || DEFAULT_PRICES_API_BASE;
+  const endpoint = new URL(`${apiBase.replace(/\/$/, "")}/products/search`);
+  endpoint.searchParams.set("q", component.name);
+  endpoint.searchParams.set("market", env.PRICES_API_MARKET || "de");
+  endpoint.searchParams.set("limit", "3");
+  endpoint.searchParams.set("offers_limit", "5");
 
-  const response = await fetchWithTimeout(endpoint, { headers: { Accept: "application/json", Authorization: `Bearer ${env.KELKOO_TOKEN}` } });
+  const response = await fetchWithTimeout(endpoint, { headers: { Accept: "application/json", Authorization: `Bearer ${env.PRICES_API_KEY}` } });
   if (!response.ok) {
-    const error = apiError(`Kelkoo returned HTTP ${response.status}`, 502, "provider_unavailable");
+    const error = apiError(`PricesAPI returned HTTP ${response.status}`, response.status === 429 ? 429 : 502, response.status === 429 ? "provider_rate_limited" : "provider_unavailable");
     throw error;
   }
 
   const payload = await readJsonResponse(response, MAX_UPSTREAM_BYTES);
-  const offers = isRecord(payload) && Array.isArray(payload.offers) ? payload.offers.map(normalizeOffer).filter((offer): offer is Offer => offer !== null) : [];
+  const products = isRecord(payload) && isRecord(payload.data) && Array.isArray(payload.data.products) ? payload.data.products : [];
+  const offers = products.flatMap((product) => {
+    if (!isRecord(product) || !Array.isArray(product.offers)) return [];
+    const fallbackTitle = stringValue(product.title) || "Untitled product";
+    return product.offers.map((offer) => normalizeOffer(offer, fallbackTitle)).filter((item): item is Offer => item !== null);
+  });
   offers.sort((a, b) => (a.price ?? Number.POSITIVE_INFINITY) - (b.price ?? Number.POSITIVE_INFINITY));
   return { ...component, status: offers.length ? "ok" : "no_match", offers: offers.slice(0, 5) };
 }
@@ -100,14 +102,17 @@ function normalizeComponents(payload: unknown): Component[] {
   return components;
 }
 
-function normalizeOffer(value: unknown): Offer | null {
+function normalizeOffer(value: unknown, fallbackTitle: string): Offer | null {
   if (!isRecord(value)) return null;
-  const title = stringValue(value.title) || "Untitled offer";
+  const title = stringValue(value.product_title) || fallbackTitle;
   const priceValue = value.price;
   const price = typeof priceValue === "number" ? priceValue : typeof priceValue === "string" ? Number(priceValue) : null;
-  const merchant = stringValue(value.merchantName) || (isRecord(value.merchant) ? stringValue(value.merchant.name) : null);
-  const url = safeUrl(stringValue(value.offerUrlLandingUrl) || stringValue(value.goUrl));
-  return { title, price: price !== null && Number.isFinite(price) ? price : null, currency: stringValue(value.currency), merchant, available: null, url };
+  const merchant = stringValue(value.seller);
+  const stock = stringValue(value.stock_status);
+  const delivery = stringValue(value.delivery_info);
+  const url = safeUrl(stringValue(value.url));
+  const available = stock ? !/out of stock|unavailable/i.test(stock) : null;
+  return { title, price: price !== null && Number.isFinite(price) ? price : null, currency: stringValue(value.currency), merchant, available, stock, delivery, url };
 }
 
 function safeUrl(value: string | null): string | null {

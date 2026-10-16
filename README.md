@@ -14,7 +14,7 @@ The page provides read-only scripts for Windows PowerShell, macOS Terminal and L
 
 ## Backend
 
-The `backend/` directory contains the Cloudflare Worker API. It validates requests, keeps the Kelkoo publisher token in a Cloudflare secret, applies origin and size limits, times out upstream requests, caches short-lived results, and returns structured errors. It intentionally does not scrape retailer websites or invent prices.
+The `backend/` directory contains the Cloudflare Worker API. It validates requests, keeps the PricesAPI key in a Cloudflare secret, applies origin and size limits, times out upstream requests, caches short-lived results, and returns structured errors. It intentionally does not expose the key to the browser or invent prices.
 
 From `backend/`:
 
@@ -22,7 +22,7 @@ From `backend/`:
 npm install
 npm run typecheck
 npm run deploy
-npx wrangler secret put KELKOO_TOKEN --env production
+npx wrangler secret put PRICES_API_KEY --env production
 ```
 
 The production Worker is `https://rigcheck-prices.gamingsockee.workers.dev`. Without the secret, `/health` remains available and price checks return `provider_not_configured`.

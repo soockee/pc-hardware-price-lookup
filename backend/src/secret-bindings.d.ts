@@ -1,3 +1,3 @@
 interface Env {
-  KELKOO_TOKEN?: string;
+  PRICES_API_KEY?: string;
 }

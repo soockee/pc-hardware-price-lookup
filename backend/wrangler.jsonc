@@ -14,8 +14,8 @@
       "name": "rigcheck-prices-staging",
       "vars": {
         "ALLOWED_ORIGINS": "http://localhost:8787,http://localhost:5173",
-        "KELKOO_API_BASE": "https://api.kelkoogroup.net/publisher/shopping/v2",
-        "KELKOO_COUNTRY": "de"
+        "PRICES_API_BASE": "https://api.pricesapi.io/api/v1",
+        "PRICES_API_MARKET": "de"
       },
       "observability": {
         "enabled": true,
@@ -26,8 +26,8 @@
       "name": "rigcheck-prices",
       "vars": {
         "ALLOWED_ORIGINS": "https://soockee.github.io",
-        "KELKOO_API_BASE": "https://api.kelkoogroup.net/publisher/shopping/v2",
-        "KELKOO_COUNTRY": "de"
+        "PRICES_API_BASE": "https://api.pricesapi.io/api/v1",
+        "PRICES_API_MARKET": "de"
       },
       "observability": {
         "enabled": true,
